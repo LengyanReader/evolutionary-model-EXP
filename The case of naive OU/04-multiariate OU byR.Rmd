@@ -1,0 +1,197 @@
+---
+title: "04-multiariate OU byR"
+
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(magrittr)
+library(MASS)
+```
+
+# Multivariate OU
+
+## 1 Setting
+---
+
+If $X \sim N(μ,Σ)$, then from $Y=BX+b => Y \sim N(Bμ+b,BΣB^T)$, 
+
+thus for $X_i  = \mathbf{H}(\Theta - X_i) (t_i - t_{i-1}) + \mathbf{L}\sqrt{t_i - t_{i-1}}W_t+X_{i-1}$, 
+
+$X_i \sim N(\mu',\Sigma')$and  
+
+$\mu' =X_{i-1} +H(\Theta -X_i)(t_{i} -t_{i-1})$
+
+$\Sigma' =L \sqrt{t_i-t_{i-1}}(L \sqrt{t_i-t_{i-1}})^T$
+
+So the form is:
+
+$f^{OU}(X_i|X_{i-1}; \Theta,H,L) = \frac{\mbox{Exp}\left (
+-\frac{1}{2}(x_i - \mu')^T \Sigma'^{-1} (x_i - \mu') 
+\right)}{\sqrt{(2 \pi)^p|\Sigma'|}}$
+
+then
+
+$ln f^{OU}(X_i|X_{i-1}; \Theta,H,L) =-\frac{1}{2}[(x_i - \mu')^T \Sigma'^{-1} (x_i - \mu')+ln|Σ| +pln(2 \pi)]$
+
+```{r 1.1 }
+
+set.seed(123)
+p=2
+S =10**3 # steps
+p_c=c(10,1.5,0.5)*0.7
+
+
+Theta = lapply(c(1:p),function(i)p_c[1]*i)%>%unlist()
+Theta = Theta%>%as.matrix()
+# to generate a positive definite mx
+egv_H = lapply(c(1:p),function(i)p_c[2]*i)%>%unlist()
+
+A1 =matrix(rnorm(p*p),nrow=p)*10^2
+Q1=qr.Q(qr(A1))
+D1 = diag(egv_H)
+H = Q1 %*% D1 %*% t(Q1) # #np.linalg.eig(H1)
+#eigen(H )
+
+# to generate a L by Cholesky decomposition
+egv_L = lapply(c(1:p),function(i)p_c[3]*i)%>%unlist()
+set.seed(123)
+A2 = matrix(rnorm(p*p),nrow=p)*10^2
+A2[upper.tri(A2, diag = FALSE)]=0
+L=A2
+diag(L)=egv_L
+
+```
+
+
+
+```{r 1.2}
+ts=seq(0,100,length.out=S)
+N=S
+dt = ts[2] - ts[1]
+X=matrix(0,nrow=N,ncol = p)
+X[1,]=rep(1.1, p)
+
+for(i in 1:(N-1)){
+  t_x1=X[i,]%>%as.matrix()
+  t_x2 = t_x1 + H %*% (Theta- t_x1) * dt  + (L * (dt)**(1/2)) %*% as.matrix(rnorm(p))
+  X[i+1,] = as.vector(t_x2)
+}
+
+
+
+plot(ts, X[,1])
+#lines(ts,X[,2],col='green' )
+#legend("bottomright", legend=c("acutal temp","predicted temp")
+ #        , pch=c(1,1), lty=c(1,1),lwd=c(1,1), col=c("black","red"))
+
+
+```
+
+## 2.1 Numercial Solution to Optimized Parameter
+
+
+If $X \sim N(μ,Σ)$, then from $Y=BX+b => Y \sim N(Bμ+b,BΣB^T)$, 
+
+thus for $X_i  = \mathbf{H}(\Theta - X_i) (t_i - t_{i-1}) + \mathbf{L}\sqrt{t_i - t_{i-1}}W_t+X_{i-1}$, 
+
+$X_i \sim N(\mu',\Sigma')$and  
+
+$\mu' =X_{i-1} +H(\Theta -X_i)(t_{i} -t_{i-1})$
+
+$\Sigma' =L \sqrt{t_i-t_{i-1}}(L \sqrt{t_i-t_{i-1}})^T$
+
+So the form is:
+
+$f^{OU}(X_i|X_{i-1}; \Theta,H,L) = \frac{\mbox{Exp}\left (
+-\frac{1}{2}(x_i - \mu')^T \Sigma'^{-1} (x_i - \mu') 
+\right)}{\sqrt{(2 \pi)^p|\Sigma'|}}$
+
+then
+
+$ln f^{OU}(X_i|X_{i-1}; \Theta,H,L) =-\frac{1}{2}[(x_i - \mu')^T \Sigma'^{-1} (x_i - \mu')+ln|Σ| +pln(2 \pi)]$
+
+
+```{r 2.1}
+
+Log_OU<-function(X1,X2, dt, p_vars){
+	
+  #------------------------------------------------------
+  Theta_lo=p_vars[1:p]%>%as.matrix()
+  
+  # to generate a positive definite mx--------------------
+  egv_H_lo=p_vars[(p+1):(2*p)]
+  D = diag(egv_H_lo)
+  H_lo = Q1 %*% D %*% t(Q1)
+  
+  # to generate a L by Cholesky decomposition
+  egv_L_lo = p_vars[(2*p+1):(3*p)]
+  #print(egv_L_lo)
+  L_lo=A2
+  diag(L_lo)=egv_L_lo
+  
+  #The likelihood--------------------------------------------------  
+  X1=X1%>%as.matrix();X2=X2%>%as.matrix() ##....-------
+ 
+  mu2 = X1 + H_lo%*%(Theta_lo-X2)*dt
+  #μ₂ = vec(μ₂)
+  #t_dif=dt**(0.5)
+  Sigma = L_lo%*%t(L_lo)
+  Sigma = dt*Sigma
+  if(det(Sigma)<1e-08){
+    Sigma_inv=ginv(Sigma, tol = sqrt(.Machine$double.eps))
+  }else{
+     Sigma_inv = solve(Sigma) }
+  
+ 
+  
+  t1 = X2-mu2
+  t2 = log(det(Sigma))
+  t3 = p*(log(2*pi))
+  #----------------------------
+  res = t(t1) %*% Sigma_inv %*% t1 + t2 + t3
+  -0.5*res
+}
+
+X1=X[4,]
+X2=X[5,]
+p_vars = c(Theta, egv_H,egv_L)
+
+Log_OU(X1,X2, dt, p_vars)
+
+nllf_OU<-function(X,dt,p_vars){
+  lf=c()
+  for(i in 2:N){
+    X2 = X[i,]
+    X1 = X[i-1,]
+    lf[i-1] = Log_OU(X1,X2, dt, p_vars)  }
+  
+  -sum(lf)
+  
+}
+
+nllf_OU(X,dt,p_vars)
+
+```
+
+```{r optim1}
+lower_pv=c(rep(-Inf,p),rep(10^(-8),2*p))
+upper_pv=rep(Inf,3*p)
+
+
+p_vars0=rep(3.6,3*p)
+optim(par=p_vars0,fn=nllf_OU,X=X,dt=dt,method="L-BFGS-B",lower=lower_pv)
+
+c(Theta,egv_H,egv_L)
+ 
+
+```
+
+
+
+
+
+
+
+
