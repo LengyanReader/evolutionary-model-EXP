@@ -1,0 +1,1395 @@
+---
+title: "OU_sim_fit"
+
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+library(PCMBase)
+library(ape)
+library(magrittr)
+library(matrixcalc)
+#library(Matrix) 
+library(ggtree)
+library(plotly)
+#library(r)
+source("tool_funs.R")
+```
+
+
+```{r}
+#save.image(file = "Rdata1/all_com_AsymHTX0_01_0416_01_2d_20.RData")
+#save.image(file = "Rda/cmp_asym_tp1_v1.RData") # tree test hitree=2
+```
+
+
+# 1 Model's Building and Simulation
+
+
+##  1.1 Setting trait dimenstion k, tips N, root X0, tree, builing model and simulation----------------------------
+```{r}
+set.seed(12345)
+source("tool_funs.R")
+#-------------------------------------------------------------------------------
+model_type="OU"  
+Htype=4   # complex asym
+k=2
+N <-100 # tips
+X0<-runif(k,-1,1) #c(1,3)#rep(0,k)  #runif(k,-10,10)   # c(1:k) #
+tree <- PCMTree(rtopology(n=N,rooted = TRUE))  # toplogo
+#-------------------------------------------------------------------------------
+Theta =runif(k,-3,3)
+#-------------------------------------------------------------------------------
+egv_Sigma2_x = runif(k,0.1,0.3)%>%sort(decreasing = TRUE) 
+Q_sigma = Gen_Q(k)
+Sigma2_x = Gen_Sigma2(egv_Sigma2_x,Q_sigma,k)
+Sigma_x<-my_chol(Sigma2_x)
+#------------------------------------
+P = Gen_P(k)
+
+#save.image(file = "Rda/tree_pc_0424.RData")
+```
+
+
+
+```{r}
+# load("D:/DataScience/LiuCourses/masterThesis/TheFormalCode/Rdata1/tree2d_0416.RData")
+
+Gen_rmce_block<-function(r_theta_par){ # a 2d vector,real part, imaginary part
+  r=r_theta_par[1]
+  theta=r_theta_par[2]
+  z<-r*exp(theta*sqrt(-1+0i))
+  a<-z%>%Re()
+  b<-z%>%Im()
+  
+  rmce=matrix(c(a,-b,b,a),nrow = 2)
+  
+  
+  return(rmce)
+}
+
+
+#Loc_rmce_block<-function(rmce,k1)
+
+
+
+Gen_rmce_block( c(1.2,-pi/6) )#%>%eigen()
+#H
+#H%>%eigen()
+```
+
+
+
+
+
+
+```{r}
+#-------------------------------------------
+Htype=4   # complex eigenvalue of
+#P = eigen(H)$vectors
+#egv_H = eigen(H)$values  #runif(k,0,2)%>%sort(decreasing = TRUE) 
+
+r_lst<-seq(from = 0, to = 1.5,by=0.5)[-c(1)]
+theta_lst<- c(1:5)*pi/6  #c(0.25*pi,pi/2,0.75*pi)  # -0.75*pi,-pi/2,-0.25*pi,
+
+r_theta_par_lst<-list()
+mn=1
+#r_v<-c()
+#theta_v<-c()
+for(i in c(1:length(r_lst))){
+  for(j in c(1:length(theta_lst))){
+    r_theta_par_lst[[mn]]<-c(r_lst[i],theta_lst[j])
+   # r_v[mn]<-r_lst[i]
+    #theta_v[mn]<-theta_lst[j]
+    mn=mn+1
+  }
+}
+
+
+
+#H_ra<-c(0.6,3*pi/5)#c(1.2,-pi/6)
+
+#----------------------------------------------------------------------------------------
+Gen_OU<-function(k,X0,Htype,H_ra,Theta,egv_Sigma2_x,Q_sigma){
+  
+  H = Gen_rmce_block(H_ra)
+  Sigma2_x = Gen_Sigma2(egv_Sigma2_x,Q_sigma,k)
+  Sigma_x<-my_chol(Sigma2_x)
+  #---------------------------------------------------------------------------------
+  model_MOU <- PCM(model = model_type , k = k) #OUC (diagonal H, diagonal Σ): OU, uncorrelated traits;
+
+  model_MOU$X0[] = X0#%>%as.vector()
+  model_MOU$Theta[] = Theta
+  model_MOU$H[] = H%>%Re()
+  model_MOU$Sigma_x[] = Sigma_x
+  #model_MOU$Sigmae_x[] = Sigmae_x
+
+  return(model_MOU)
+}
+
+#model_MOU<-Gen_OU(k,X0,Htype,H_ra,Theta,egv_Sigma2_x,Q_sigma)
+
+model_MOU_lst<-lapply(r_theta_par_lst, function(H_ra)Gen_OU(k,X0,Htype,H_ra,Theta,egv_Sigma2_x,Q_sigma))
+
+
+Gen_Traits<-function(tree,model_MOU){
+  # equal prob for each topology
+  traits <- PCMSim(tree, model_MOU, model_MOU$X0)#[,tree$tip.label]
+  traits<-traits[,tree$tip.label]
+  
+  return(traits)
+}
+
+#traits<-Gen_Traits(tree,model_MOU)
+#traits
+traits_lst<-lapply(model_MOU_lst, function(model_MOU)Gen_Traits(tree,model_MOU))
+
+###################################
+cmp_lf_mou<-function(tree,k,model_MOU,traits){
+  
+  
+ #model_trait<-Gen_Traits(tree,k,X0,Htype,egv_H,P,Theta,egv_Sigma2_x,Q_sigma)
+ #model_MOU<-model_trait$model
+# traits <- model_trait$traits
+  
+  param <- double( PCMParamCount(model_MOU) )
+  PCMParamLoadOrStore(model_MOU, param, offset=0, load=FALSE)
+  likFun <- PCMCreateLikelihood(traits, tree, model_MOU)
+  
+  return(list(lik=likFun(param)[1],param=param,model=model_MOU))
+}
+
+cnt_H<-length(r_theta_par_lst)
+#r_lm<-cmp_lf_mou(tree,k,model_MOU,traits)
+#r_lm
+r_lm_lst<-list()
+for(i in c(1:cnt_H)){
+  r_lm_lst[[i]]<-cmp_lf_mou(tree,k,model_MOU_lst[[i]],traits_lst[[i]])
+}
+
+egv_H_lst<-list()
+P_lst<-list()
+for(i in c(1:cnt_H)){
+  egdH<-r_lm_lst[[i]]$model$H[,,1]%>%eigen()
+  egv_H_lst[[i]] <-egdH$values
+  P_lst[[i]]<-egdH$vectors
+}
+
+
+##########################
+```
+
+
+```{r}
+
+Gen_OU_cp<-function(k,X0,Htype,egv_H,P,Theta,egv_Sigma2_x,Q_sigma){
+  
+  #H = Gen_rmce_block(H_ra[1],H_ra[2])
+  H = P%*%diag(egv_H)%*%solve(P)
+  H<-Re(H)
+  
+  Sigma2_x = Gen_Sigma2(egv_Sigma2_x,Q_sigma,k)
+  Sigma_x<-my_chol(Sigma2_x)
+  #---------------------------------------------------------------------------------
+  model_MOU <- PCM(model = model_type , k = k) #OUC (diagonal H, diagonal Σ): OU, uncorrelated traits;
+
+  model_MOU$X0[] = X0#%>%as.vector()
+  model_MOU$Theta[] = Theta
+  model_MOU$H[] = H%>%Re()
+  model_MOU$Sigma_x[] = Sigma_x
+  #model_MOU$Sigmae_x[] = Sigmae_x
+
+  return(model_MOU)
+}
+
+
+```
+
+
+
+
+
+# 2 Experiment 
+
+## 2.1 eigenvalue of H
+
+### 1) Trying different eigenvalues
+
+```{r}
+n_t=20
+
+theta_i=seq(-0*pi,1*pi,length.out=n_t)[-c(1)]
+r_i=seq(0,3,length.out=n_t+1)[-c(1)]
+#ar=expand.grid(r_i,theta_i)%>%as.array()
+
+ar<-list()
+mn=1
+r_v<-c()
+theta_v<-c()
+for(i in c(1:n_t)){
+  for(j in c(1:n_t)){
+    ar[[mn]]<-c(r_i[i],theta_i[j])
+    r_v[mn]<-r_i[i]
+    theta_v[mn]<-theta_i[j]
+    mn=mn+1
+  }
+}
+#cnt_H
+
+#######################################
+pch_lst<-list()
+for(H_i in c(1:cnt_H)){
+  print(paste0(H_i,":"))
+  print(r_theta_par_lst[[H_i]])
+  print(egv_H_lst[[H_i]])
+  rtlik<-lapply(ar, function(H_ra)cmp_lf_mou(tree,k,Gen_OU(k,X0,Htype,H_ra,Theta,egv_Sigma2_x,Q_sigma),traits_lst[[H_i]])$lik )%>%unlist()
+  pch_lst[[H_i]] <-plot_ly(x = r_v, y = theta_v, z = rtlik, type = "contour")
+  
+}
+
+
+
+rtlik_lst<-list()
+for(H_i in c(1:cnt_H)){
+  print(paste0(H_i,":"))
+  print(r_theta_par_lst[[H_i]])
+  print(egv_H_lst[[H_i]])
+  #rtlik<-
+  rtlik_lst[[H_i]]<-lapply(ar, function(H_ra)cmp_lf_mou(tree,k,Gen_OU(k,X0,Htype,H_ra,Theta,egv_Sigma2_x,Q_sigma),traits_lst[[H_i]])$lik )%>%unlist()
+ # pch_lst[[H_i]] <-plot_ly(x = r_v, y = theta_v, z = rtlik, type = "contour")
+  
+}
+
+c_sel_al1=c(1:cnt_H)
+res_tb1_rtlik<-list()  
+#res_tb2<-list()
+for(ix in c_sel_al1 ){
+  res_tb1_rtlik[[ix]]<-table((rtlik_lst[c_sel_al1[ix]][[1]]- r_lm_lst[c_sel_al1[ix]][[1]]$lik)>0)
+  #res_tb2[[ix]]<-table((tr12_2_lik_lst[c_sel_al1[ix]][[1]]- r_lm_lst[c_sel_al1[ix]][[1]]$lik)>0)
+  
+}
+
+
+
+```
+
+
+
+
+
+```{r}
+n_t=20
+
+theta_i=seq(-0*pi,1*pi,length.out=n_t)[-c(1)]
+r_i=seq(0,3,length.out=n_t+1)[-c(1)]
+#ar=expand.grid(r_i,theta_i)%>%as.array()
+
+ar<-list()
+mn=1
+r_v<-c()
+theta_v<-c()
+for(i in c(1:n_t)){
+  for(j in c(1:n_t)){
+    ar[[mn]]<-c(r_i[i],theta_i[j])
+    r_v[mn]<-r_i[i]
+    theta_v[mn]<-theta_i[j]
+    mn=mn+1
+  }
+}
+#cnt_H
+
+#######################################
+pch_lst1<-list()
+for(H_i in c(1,12)){
+  print(paste0(H_i,":"))
+  print(r_theta_par_lst[[H_i]])
+  print(egv_H_lst[[H_i]])
+  rtlik<-lapply(ar, function(H_ra)cmp_lf_mou(tree,k,Gen_OU(k,X0,Htype,H_ra,Theta,egv_Sigma2_x,Q_sigma),traits_lst[[H_i]])$lik )%>%unlist()
+  pch_lst1[[H_i]] <-plot_ly(x = r_v, y = theta_v, z = rtlik, type = "contour", contours = list(showlabels = TRUE))
+  
+}
+
+
+
+
+
+pch_lst1[[12]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("r") ),
+         yaxis = list(title = TeX("\\theta")
+                     )) %>% config(mathjax = 'cdn')
+
+
+
+
+
+```
+
+
+
+### 2) multiplication by a rotation/unitary matrix  P*R 
+
+```{r}
+ # rotation in one plane
+ang=pi/2
+#k=2
+k1=1
+k2=2
+rotate_cmp<-function(ang,k,k1,k2){
+  r_mx<-diag(1,k)
+  rt<-matrix(c(cos(ang),sin(ang),-sin(ang),cos(ang)),nrow = 2  ) 
+  r_mx[k1,c(k1,k2)]<- rt[1,]
+  r_mx[k2,c(k1,k2)]<- rt[2,]
+  
+  return(r_mx)
+  }    
+
+rotate_cmp(ang,k,k1,k2)
+
+```
+
+
+
+```{r}
+n_t=333
+ang_lst<-seq(0,2*pi,length.out=n_t)[-c(1,n_t)]
+
+P_rt_lst<-lapply(ang_lst,function(ang)rotate_cmp(ang,k,k1,k2)%*%P )
+
+
+rt_pl_lst<-list()  # rt_pl_lst[[]]
+m<-1
+for(i in c(1:(k-1))){
+  for(j in c((i+1):k)){
+    rt_pl_lst[[m]]<-c(i,j)
+    m=m+1
+  }
+  
+}
+
+test_egv_P_rt_llk<-function(ang_lst,rt_pl){
+ # egv_H_arr[,,t_dim]
+ # egv_P_lst<-lapply(p_r_v, function(r)r*P)
+  k1=rt_pl[1]
+  k2=rt_pl[2]
+  P_rt_lst<-lapply(ang_lst,function(ang)P_lst[[H_i]]%*%rotate_cmp(ang,k,k1,k2) )
+  print(paste0(H_i,":"))
+  #print(H_r[[H_i]])
+  llk<-lapply(P_rt_lst, function(P)cmp_lf_mou(tree,k,Gen_OU_cp(k,X0,Htype,egv_H_lst[[H_i]],P,Theta,egv_Sigma2_x,Q_sigma),traits_lst[[H_i]])$lik )%>%unlist()
+  
+  plot_ly(x =ang_lst, y =llk, type = 'scatter', name="lik test",mode = 'markers') %>%   # mode = 'lines',
+    add_lines( y=r_lm_lst[[H_i]]$lik,name='lik0')
+  #llk
+  }
+
+
+
+
+
+p_rt_lst<-list()
+for(H_i in c(1:cnt_H) ){
+  p_rt_lst[[H_i]]<-(lapply(rt_pl_lst,function(rt_pl)test_egv_P_rt_llk(ang_lst,rt_pl))%>%subplot()  )  
+}
+
+p_rt_lst
+
+
+test_egv_P_rt_llk00<-function(ang_lst,rt_pl){
+ # egv_H_arr[,,t_dim]
+ # egv_P_lst<-lapply(p_r_v, function(r)r*P)
+  k1=rt_pl[1]
+  k2=rt_pl[2]
+  P_rt_lst<-lapply(ang_lst,function(ang)P_lst[[H_i]]%*%rotate_cmp(ang,k,k1,k2) )
+  print(paste0(H_i,":"))
+  #print(H_r[[H_i]])
+  llk<-lapply(P_rt_lst, function(P)cmp_lf_mou(tree,k,Gen_OU_cp(k,X0,Htype,egv_H_lst[[H_i]],P,Theta,egv_Sigma2_x,Q_sigma),traits_lst[[H_i]])$lik )%>%unlist()
+  
+  llk
+  }
+
+p_rt_lst_llk<-list()
+for(H_i in c(1:cnt_H) ){
+  p_rt_lst_llk[[H_i]]<-(lapply(rt_pl_lst,function(rt_pl)test_egv_P_rt_llk00(ang_lst,rt_pl))  )  
+}
+
+
+res_tb1_prtlik<-list()  
+#res_tb2<-list()
+for(ix in c_sel_al1 ){
+  res_tb1_prtlik[[ix]]<-table((p_rt_lst_llk[c_sel_al1[ix]][[1]][[1]]- r_lm_lst[c_sel_al1[ix]][[1]]$lik)>0)
+  #res_tb2[[ix]]<-table((tr12_2_lik_lst[c_sel_al1[ix]][[1]]- r_lm_lst[c_sel_al1[ix]][[1]]$lik)>0)
+  
+}
+
+r_theta_par_lst[c(4,5,13)]
+
+```
+
+```{r}
+
+
+p_rt_lst[[5]]  %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Angle of Rotation Matrix }") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+```
+
+
+
+## 2.3 Theta
+
+
+### 1) Trying differnet Theta values
+
+
+
+
+```{r}
+
+n_t=333#0
+
+Theta_arr<-array(0, dim = c(n_t, k, k))
+Theta_i=seq(-5,5,length.out=n_t)
+for(t_dim in 1:k){
+  Theta_arr[,,t_dim][,t_dim] = Theta_i
+  Theta_arr[,,t_dim][,-c(t_dim)]  = rep(Theta[-c(t_dim)],n_t)%>%matrix(byrow = TRUE,nrow = n_t)
+    
+  }
+  
+
+#cmp_lf_mou(tree,k,Gen_OU(k,X0,Htype,egv_H,P,Theta,egv_Sigma2_x,Q_sigma),traits)$lik
+#cmp_lf_mou(tree,k,Gen_OU(k,X0,Htype,egv_H=runif(k),P,Theta,egv_Sigma2_x,Q_sigma),traits)$lik
+
+
+#t_dim=1
+test_Theta_llk<-function(t_dim){
+ # egv_H_arr[,,t_dim]
+   print(paste0(H_i,":"))
+  print(egv_H_lst[[H_i]])
+  print(paste0("k=",t_dim))
+  Theta_lst<-lapply(c(1:n_t), function(i)Theta_arr[i,,t_dim])
+  llk<-lapply(Theta_lst, function(Theta)cmp_lf_mou(tree,k,Gen_OU_cp(k,X0,Htype,egv_H_lst[[H_i]],P,Theta,egv_Sigma2_x,Q_sigma),traits_lst[[H_i]])$lik )%>%unlist()
+  
+  plot_ly(x =Theta_arr[,t_dim,t_dim], y =llk, type = 'scatter', mode = 'markers',name=paste0("Theta",t_dim))%>%
+    add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0")) %>% #add_segments( x=-6,xend=6, y = r_lm$lik, yend = r_lm$lik,name='lik0')
+    add_lines(x=Theta[t_dim],showlegend = FALSE)
+  #llk
+  }
+
+pTheta_lst1<-list()
+for(H_i in c(1:cnt_H)  ){ #
+  pTheta<-list()
+  for(i in c(1:k))pTheta[[i]]<-test_Theta_llk(t_dim=i)
+  pTheta_lst1[[H_i]]<-subplot(pTheta)
+}
+
+#pTheta_lst[[22]]
+#H_i=28
+
+#c_sel_tta<-c(1,2,23,24,25,26,31,45)
+
+```
+
+```{r}
+n_t=500#0
+
+Theta_arr<-array(0, dim = c(n_t, k, k))
+Theta_i=seq(-10000,10000,length.out=n_t)
+for(t_dim in 1:k){
+  Theta_arr[,,t_dim][,t_dim] = Theta_i
+  Theta_arr[,,t_dim][,-c(t_dim)]  = rep(Theta[-c(t_dim)],n_t)%>%matrix(byrow = TRUE,nrow = n_t)
+    
+  }
+  
+
+#cmp_lf_mou(tree,k,Gen_OU(k,X0,Htype,egv_H,P,Theta,egv_Sigma2_x,Q_sigma),traits)$lik
+#cmp_lf_mou(tree,k,Gen_OU(k,X0,Htype,egv_H=runif(k),P,Theta,egv_Sigma2_x,Q_sigma),traits)$lik
+
+
+#t_dim=1
+test_Theta_llk<-function(t_dim){
+ # egv_H_arr[,,t_dim]
+   print(paste0(H_i,":"))
+  print(egv_H_lst[[H_i]])
+  print(paste0("k=",t_dim))
+  Theta_lst<-lapply(c(1:n_t), function(i)Theta_arr[i,,t_dim])
+  llk<-lapply(Theta_lst, function(Theta)cmp_lf_mou(tree,k,Gen_OU_cp(k,X0,Htype,egv_H_lst[[H_i]],P,Theta,egv_Sigma2_x,Q_sigma),traits_lst[[H_i]])$lik )%>%unlist()
+  
+  plot_ly(x =Theta_arr[,t_dim,t_dim], y =llk, type = 'scatter', mode = 'markers',name=paste0("Theta",t_dim))%>%
+    add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0")) %>% #add_segments( x=-6,xend=6, y = r_lm$lik, yend = r_lm$lik,name='lik0')
+    add_lines(x=Theta[t_dim],showlegend = FALSE)
+  #llk
+  }
+
+pTheta_lst11<-list()
+for(H_i in c(3,8,13)  ){ #1,4,
+  pTheta<-list()
+  for(i in c(1:k))pTheta[[i]]<-test_Theta_llk(t_dim=i)
+  pTheta_lst11[[H_i]]<-pTheta
+}
+
+
+
+pTheta_lst11[[1]][[1]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Experment } \\mathbf{\\Theta}[1]") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+
+
+pTheta_lst11[[8]][[2]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Experment } \\mathbf{\\Theta}[2]") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+
+
+
+pTheta_lst11[[4]][[1]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Experment } \\mathbf{\\Theta}[1]") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+
+pTheta_lst11[[4]][[2]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Experment } \\mathbf{\\Theta}[2]") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+```
+
+
+```{r}
+n_t=333#0
+
+Theta_arr<-array(0, dim = c(n_t, k, k))
+Theta_i=seq(-10,10,length.out=n_t)
+for(t_dim in 1:k){
+  Theta_arr[,,t_dim][,t_dim] = Theta_i
+  Theta_arr[,,t_dim][,-c(t_dim)]  = rep(Theta[-c(t_dim)],n_t)%>%matrix(byrow = TRUE,nrow = n_t)
+    
+  }
+  
+
+#cmp_lf_mou(tree,k,Gen_OU(k,X0,Htype,egv_H,P,Theta,egv_Sigma2_x,Q_sigma),traits)$lik
+#cmp_lf_mou(tree,k,Gen_OU(k,X0,Htype,egv_H=runif(k),P,Theta,egv_Sigma2_x,Q_sigma),traits)$lik
+
+
+#t_dim=1
+test_Theta_llk<-function(t_dim){
+ # egv_H_arr[,,t_dim]
+   print(paste0(H_i,":"))
+  print(egv_H_lst[[H_i]])
+  print(paste0("k=",t_dim))
+  Theta_lst<-lapply(c(1:n_t), function(i)Theta_arr[i,,t_dim])
+  llk<-lapply(Theta_lst, function(Theta)cmp_lf_mou(tree,k,Gen_OU_cp(k,X0,Htype,egv_H_lst[[H_i]],P,Theta,egv_Sigma2_x,Q_sigma),traits_lst[[H_i]])$lik )%>%unlist()
+  
+  plot_ly(x =Theta_arr[,t_dim,t_dim], y =llk, type = 'scatter', mode = 'markers',name=paste0("Theta",t_dim))%>%
+    add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0")) %>% #add_segments( x=-6,xend=6, y = r_lm$lik, yend = r_lm$lik,name='lik0')
+    add_lines(x=Theta[t_dim],showlegend = FALSE)
+  #llk
+  }
+
+pTheta_lst11<-list()
+for(H_i in c(1,4,8,14)  ){ #
+  pTheta<-list()
+  for(i in c(1:k))pTheta[[i]]<-test_Theta_llk(t_dim=i)
+  pTheta_lst11[[H_i]]<-pTheta
+}
+
+
+
+pTheta_lst11[[1]][[1]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Experment } \\mathbf{\\Theta}[1]") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+
+
+pTheta_lst11[[8]][[2]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Experment } \\mathbf{\\Theta}[2]") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+
+
+
+pTheta_lst11[[4]][[1]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Experment } \\mathbf{\\Theta}[1]") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+
+pTheta_lst11[[4]][[2]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Experment } \\mathbf{\\Theta}[2]") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+
+
+pTheta_lst11[[14]][[1]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Experment } \\mathbf{\\Theta}[1]") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+
+pTheta_lst11[[14]][[2]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Experment } \\mathbf{\\Theta}[2]") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+```
+
+## 2.4 eigenvalue of Sigma
+
+### 1) trying different eigenvlues 
+
+
+
+
+
+
+```{r}
+
+n_t=333
+
+egv_Sigma2_x_arr<-array(0, dim = c(n_t, k, k))
+egv_Sigma2_x_i=seq(0.0000001,16,length.out=n_t)
+for(t_dim in 1:k){
+  egv_Sigma2_x_arr[,,t_dim][,t_dim] = egv_Sigma2_x_i
+  egv_Sigma2_x_arr[,,t_dim][,-c(t_dim)]  = rep(egv_Sigma2_x[-c(t_dim)],n_t)%>%matrix(byrow = TRUE,nrow = n_t)
+    
+  }
+  
+
+#cmp_lf_mou(tree,k,Gen_OU(k,X0,Htype,egv_H,P,Theta,egv_Sigma2_x,Q_sigma),traits)$lik
+#cmp_lf_mou(tree,k,Gen_OU(k,X0,Htype,egv_H=runif(k),P,Theta,egv_Sigma2_x,Q_sigma),traits)$lik
+
+
+#t_dim=1
+test_egv_Sigma2_x_llk<-function(t_dim){
+ # egv_H_arr[,,t_dim]
+  
+  print(paste0(H_i,":"))
+  print(egv_H_lst[[H_i]])
+  print(paste0("k=",t_dim))
+  egv_Sigma2_x_lst<-lapply(c(1:n_t), function(i)egv_Sigma2_x_arr[i,,t_dim])
+  llk<-lapply(egv_Sigma2_x_lst, function(egv_Sigma2_x)cmp_lf_mou(tree,k,Gen_OU_cp(k,X0,Htype,egv_H_lst[[H_i]],P,Theta,egv_Sigma2_x,Q_sigma),traits_lst[[H_i]])$lik )%>%unlist()
+  
+  plot_ly(x =egv_Sigma2_x_arr[,t_dim,t_dim], y =llk, type = 'scatter',  mode = 'markers',name=paste0("Sigma2_",t_dim))%>%
+    add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0")) %>% #add_segments( x=-6,xend=6, y = r_lm$lik, yend = r_lm$lik,name='lik0')
+    add_lines(x=egv_Sigma2_x[t_dim],showlegend = FALSE)
+  #llk
+  }
+
+
+#c_sel_al<-c(c_sel,c_sel_tta)%>%unique()%>%sort()
+
+pegv_Sigma2_x_lst<-list()
+for(H_i in c(1:cnt_H)   ){
+  pegv_Sigma2_x<-list()
+  for(i in c(1:k)){ pegv_Sigma2_x[[i]]<-test_egv_Sigma2_x_llk(t_dim=i)}
+  pegv_Sigma2_x_lst[[H_i]]<-(pegv_Sigma2_x%>%subplot())
+}
+
+pegv_Sigma2_x_lst
+
+
+```
+
+
+
+```{r}
+
+n_t=333
+
+egv_Sigma2_x_arr<-array(0, dim = c(n_t, k, k))
+egv_Sigma2_x_i=seq(0.0000001,16,length.out=n_t)
+for(t_dim in 1:k){
+  egv_Sigma2_x_arr[,,t_dim][,t_dim] = egv_Sigma2_x_i
+  egv_Sigma2_x_arr[,,t_dim][,-c(t_dim)]  = rep(egv_Sigma2_x[-c(t_dim)],n_t)%>%matrix(byrow = TRUE,nrow = n_t)
+    
+  }
+  
+
+#cmp_lf_mou(tree,k,Gen_OU(k,X0,Htype,egv_H,P,Theta,egv_Sigma2_x,Q_sigma),traits)$lik
+#cmp_lf_mou(tree,k,Gen_OU(k,X0,Htype,egv_H=runif(k),P,Theta,egv_Sigma2_x,Q_sigma),traits)$lik
+
+
+#t_dim=1
+test_egv_Sigma2_x_llk<-function(t_dim){
+ # egv_H_arr[,,t_dim]
+  
+  print(paste0(H_i,":"))
+  print(egv_H_lst[[H_i]])
+  print(paste0("k=",t_dim))
+  egv_Sigma2_x_lst<-lapply(c(1:n_t), function(i)egv_Sigma2_x_arr[i,,t_dim])
+  llk<-lapply(egv_Sigma2_x_lst, function(egv_Sigma2_x)cmp_lf_mou(tree,k,Gen_OU_cp(k,X0,Htype,egv_H_lst[[H_i]],P,Theta,egv_Sigma2_x,Q_sigma),traits_lst[[H_i]])$lik )%>%unlist()
+  
+  plot_ly(x =egv_Sigma2_x_arr[,t_dim,t_dim], y =llk, type = 'scatter',  mode = 'markers',name=paste0("Sigma2_",t_dim))%>%
+    add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0")) %>% #add_segments( x=-6,xend=6, y = r_lm$lik, yend = r_lm$lik,name='lik0')
+    add_lines(x=egv_Sigma2_x[t_dim],showlegend = FALSE)
+  #llk
+  }
+
+
+#c_sel_al<-c(c_sel,c_sel_tta)%>%unique()%>%sort()
+
+pegv_Sigma2_x_lst1<-list()
+for(H_i in c(1,5)   ){
+  pegv_Sigma2_x<-list()
+  for(i in c(1:k)){ pegv_Sigma2_x[[i]]<-test_egv_Sigma2_x_llk(t_dim=i)}
+  pegv_Sigma2_x_lst1[[H_i]]<-pegv_Sigma2_x#%>%subplot())
+}
+
+pegv_Sigma2_x_lst1
+
+
+
+
+pegv_Sigma2_x_lst1[[1]][[2]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Experment } \\mathbf{\\lambda_{\\Sigma}}[2]") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+
+pegv_Sigma2_x_lst1[[5]][[1]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Experment } \\mathbf{\\lambda_{\\Sigma}}[1]") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+
+```
+
+
+
+
+
+## 2.4 eigenvector of Sigma
+
+
+
+
+### 2) multiplication by a rotation/unitary matrix  P*R 
+
+```{r}
+n_t=333
+ang_lst<-seq(0,2*pi,length.out=n_t)[-c(1,n_t)]
+
+qs_rt_lst<-lapply(ang_lst,function(ang)rotate_cmp(ang,k,k1,k2)%*%P )
+
+
+rt_pl_lst<-list()  # rt_pl_lst[[]]
+m<-1
+for(i in c(1:(k-1))){
+  for(j in c((i+1):k)){
+    rt_pl_lst[[m]]<-c(i,j)
+    m=m+1
+  }
+  
+}
+
+test_egv_qs_rt_llk<-function(ang_lst,rt_pl){
+ # egv_H_arr[,,t_dim]
+ # egv_P_lst<-lapply(p_r_v, function(r)r*P)
+  k1=rt_pl[1]
+  k2=rt_pl[2]
+  qs_rt_lst<-lapply(ang_lst,function(ang)Q_sigma%*%rotate_cmp(ang,k,k1,k2) )
+  print(paste0(H_i,":"))
+  print(egv_H_lst[[H_i]])
+  llk<-lapply(qs_rt_lst, function(Q_sigma)cmp_lf_mou(tree,k,Gen_OU_cp(k,X0,Htype,egv_H_lst[[H_i]],P,Theta,egv_Sigma2_x,Q_sigma),traits_lst[[H_i]])$lik )%>%unlist()
+  
+  plot_ly(x =ang_lst, y =llk, type = 'scatter', name="lik test",mode = 'markers') %>%   # mode = 'lines',
+    add_lines( y=r_lm_lst[[H_i]]$lik,name='lik0')
+  #llk
+  }
+
+qs_rt_lst<-list()
+for(H_i in c(1:cnt_H) ){
+  qs_rt_lst[[H_i]]<-(lapply(rt_pl_lst,function(rt_pl)test_egv_qs_rt_llk(ang_lst,rt_pl))%>%subplot()  )  
+}
+
+qs_rt_lst
+```
+
+
+```{r}
+
+
+
+qs_rt_lst[[12]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Angle of Rotation Matrix }") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+```
+
+
+
+
+
+
+
+## 2.5 Length/Edge, t
+
+t, information propagating effect
+
+```{r}
+edge=data.frame(tree$edge, tree$edge.length)
+colnames(edge)=c("parent", "node", "edge_length")
+PCMTreeSetLabels(tree)  
+#p<-ggtree(tree)+ geom_nodelab(size = 4)+geom_rootedge(rootedge = 0.1)+geom_tiplab()
+#p %<+% edge + geom_label(aes(x=branch, label=edge_length))
+PCMTreePlot(tree) + ggtree::geom_nodelab(size = 2)
+
+
+```
+
+
+```{r}
+
+library(castor)
+hitree=H_i
+model_MOU=model_MOU_lst[[hitree]]
+traits=traits_lst[[hitree]]
+cmp_lf_mou(tree,k,model_MOU,traits)$lik
+find_root(tree)
+node.depth.edgelength(tree) %>%max()
+
+#node.depth.edgelength(tree)%>%sum()
+
+
+tree$edge.lengt%>%sum()
+tree$edge.length[tree$edge[,2] %in% c(1:100)]%>%sum()
+tree$edge.length[!(tree$edge[,2] %in% c(1:100))]%>%sum()
+tree$edge.length[tree$edge[,2] %in% c(1:100)]%>%sum()+tree$edge.length[!(tree$edge[,2] %in% c(1:100))]%>%sum()
+
+```
+
+
+
+### 1)
+```{r}
+#tree_1$tip.label
+#tree_1$edge.length
+tree_mdf_1<-function(tree,N,t_r){  # reduce tip2parent, increase shared length, keep the sum of edge-length unchanged
+  tree_1<-tree
+  #tips_egde<-tree_1$edge[tree_1$edge[,2] %in% c(1:100),]
+  t_dif<-tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]*t_r
+  tips_edge_length<-tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]
+  tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]<-tips_edge_length-t_dif
+  nontips_edge_length<-tree_1$edge.length[!tree_1$edge[,2] %in% c(1:N)]
+  tree_1$edge.length[!tree_1$edge[,2] %in% c(1:N)]<-nontips_edge_length+sum(t_dif)/length(nontips_edge_length)
+  
+  return(tree_1)
+  
+}
+
+tree_mdf_2<-function(tree,N,t_r){  # increase tip2parent, reduce shared length
+  tree_1<-tree
+  #tips_egde<-tree_1$edge[tree_1$edge[,2] %in% c(1:100),]
+  
+  t_dif<-tree_1$edge.length[!(tree_1$edge[,2] %in% c(1:N))]*t_r
+  nontips_edge_length<-tree_1$edge.length[!(tree_1$edge[,2] %in% c(1:N))]
+  tree_1$edge.length[!(tree_1$edge[,2] %in% c(1:N))]<-nontips_edge_length-t_dif
+ 
+  tips_edge_length<-tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]
+  tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]<-tips_edge_length+sum(t_dif)/length(tips_edge_length)
+  
+   return(tree_1)
+  
+}
+
+
+t_r<-0.1
+
+tree_1<-tree_mdf_1(tree,N,t_r)
+tree_2<-tree_mdf_2(tree,N,t_r)
+
+
+tree_1$edge.lengt%>%sum()
+tree_2$edge.lengt%>%sum()
+#cmp_lf_mou(tree_1,k,model_MOU,traits)$lik
+#cmp_lf_mou(tree_2,k,model_MOU,traits)$lik
+
+
+
+```
+
+
+```{r}
+
+#plot(tr1_lik)
+#plot(tr2_lik)
+# likelihood of decreased shared length
+
+t_r_lst<-seq(0,0.97,by=0.005)
+
+c_sel_al<-c(1:cnt_H)
+
+tr_12<-function(H_i){
+print(paste(":",H_i))
+tr1_lik<-lapply(t_r_lst,function(t_r)cmp_lf_mou(tree_mdf_1(tree,N,t_r),k,model_MOU_lst[[H_i]],traits_lst[[H_i]])$lik)%>%unlist()
+tr2_lik<-lapply(t_r_lst,function(t_r)cmp_lf_mou(tree_mdf_2(tree,N,t_r),k,model_MOU_lst[[H_i]],traits_lst[[H_i]])$lik)%>%unlist()
+plik_1<-plot_ly(x =t_r_lst, y =tr1_lik, name = "tr1_lik",type = 'scatter',mode = 'markers')%>%
+   add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0"))
+
+plik_2<-plot_ly(x =t_r_lst, y =tr2_lik, name = "tr2_lik", type = 'scatter',mode = 'markers'   )%>%
+   add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0"))
+
+p<-subplot(plik_1, plik_2)
+
+return(list(p=p,tr1_lik=tr1_lik,tr2_lik=tr2_lik))
+}
+
+
+res_tr_12_lst<-list()
+tr12_1_lik_lst<-list()   
+tr12_2_lik_lst<-list()
+for(H_i in c_sel_al   ){
+  res<-tr_12(H_i)
+  res_tr_12_lst[[H_i]] <-res$p
+  tr12_1_lik_lst[[H_i]] <-res$tr1_lik
+  tr12_2_lik_lst[[H_i]] <-res$tr2_lik
+}
+
+#res_tr_12_lst
+
+
+
+
+
+
+
+res_tb1<-list()   #c(1,2,4,8,11,14)  
+r_theta_par_lst[c(1,2,4,8,11,14)  ]
+res_tb2<-list() #(1,5,10)
+for(ix in c(1:length(c_sel_al)) ){
+  res_tb1[[ix]]<-table((tr12_1_lik_lst[c_sel_al[ix]][[1]]- r_lm_lst[c_sel_al[ix]][[1]]$lik)>0)
+  res_tb2[[ix]]<-table((tr12_2_lik_lst[c_sel_al[ix]][[1]]- r_lm_lst[c_sel_al[ix]][[1]]$lik)>0)
+  
+}
+
+
+ll<-length(t_r_lst)
+c_sel_al<-c_sel_al1
+res_tb1_td<-list() #c(1,2,4,8,11,14)
+res_tb2_td<-list()  #(1,5,10)
+
+for(ix in c(1:length(c_sel_al1)) ){
+  res_tb1_td[[ix]]<-table((tr12_1_lik_lst[c_sel_al1[ix]][[1]][c(2:ll)]- tr12_1_lik_lst[c_sel_al1[ix]][[1]][c(1:(ll-1))])>0)
+  res_tb2_td[[ix]]<-table((tr12_2_lik_lst[c_sel_al1[ix]][[1]][c(2:ll)]- tr12_2_lik_lst[c_sel_al1[ix]][[1]][c(1:(ll-1))])>0)
+  
+}
+
+r_theta_par_lst[c(1,5,10)  ]
+
+
+
+
+#plik_10<-plot_ly(x =t_r_lst[1:20], y =tr1_lik[1:20], name = "tr1_lik",type = 'scatter',mode = 'markers')
+
+#plik_20<-plot_ly(x =t_r_lst[1:20], y =tr2_lik[1:20], name = "tr1_lik",type = 'scatter',mode = 'markers' )
+#subplot(plik_10, plik_20)
+
+#(tr1_lik[2:(length(t_r_lst))]-tr1_lik[1:(length(t_r_lst)-1)])>0
+```
+
+(c) Only decreasing t tpar  or shr
+
+
+```{r}
+
+#tree_1$tip.label
+#tree_1$edge.length
+tree_mdf_1e<-function(tree,N,t_r){  # only decrease t_par
+  tree_1<-tree
+  #tips_egde<-tree_1$edge[tree_1$edge[,2] %in% c(1:100),]
+  t_dif<-tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]*t_r
+  tips_edge_length<-tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]
+  tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]<-tips_edge_length-t_dif
+ # nontips_edge_length<-tree_1$edge.length[!tree_1$edge[,2] %in% c(1:N)]
+ # tree_1$edge.length[!tree_1$edge[,2] %in% c(1:N)]<-nontips_edge_length+sum(t_dif)/length(nontips_edge_length)
+  
+  return(tree_1)
+}
+
+tree_mdf_2e<-function(tree,N,t_r){  # only decrease t_shr
+  tree_1<-tree
+  #tips_egde<-tree_1$edge[tree_1$edge[,2] %in% c(1:100),]
+  
+  t_dif<-tree_1$edge.length[!(tree_1$edge[,2] %in% c(1:N))]*t_r
+  nontips_edge_length<-tree_1$edge.length[!(tree_1$edge[,2] %in% c(1:N))]
+  tree_1$edge.length[!(tree_1$edge[,2] %in% c(1:N))]<-nontips_edge_length-t_dif
+ 
+ # tips_edge_length<-tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]
+#  tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]<-tips_edge_length+sum(t_dif)/length(tips_edge_length)
+  
+   return(tree_1)
+}
+
+```
+
+
+```{r}
+#t_r_lst<-seq(0,0.97,by=0.005)
+
+
+tr_34<-function(H_i){
+print(paste(":",H_i))  
+tr1_like<-lapply(t_r_lst,function(t_r)cmp_lf_mou(tree_mdf_1e(tree,N,t_r),k,model_MOU_lst[[H_i]],traits_lst[[H_i]])$lik)%>%unlist()
+tr2_like<-lapply(t_r_lst,function(t_r)cmp_lf_mou(tree_mdf_2e(tree,N,t_r),k,model_MOU_lst[[H_i]],traits_lst[[H_i]])$lik)%>%unlist()
+
+plik_1e<-plot_ly(x =t_r_lst, y =tr1_like, name = "tr1_like",type = 'scatter',mode = 'markers')%>%
+   add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0"))
+
+plik_2e<-plot_ly(x =t_r_lst, y =tr2_like, name = "tr2_like", type = 'scatter',mode = 'markers')%>%
+   add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0"))
+
+p<-subplot(plik_1e, plik_2e)
+
+return(list(p=p,tr1_like=tr1_like,tr2_like=tr2_like))
+  
+}
+
+
+
+
+res_tr_34_lst<-list()
+tr34_1_lik_lst<-list()
+tr34_2_lik_lst<-list()
+for(H_i in c_sel_al   ){
+  res<-tr_34(H_i)
+  res_tr_34_lst[[H_i]] <-res$p
+  tr34_1_lik_lst[[H_i]] <-res$tr1_like
+  tr34_2_lik_lst[[H_i]] <-res$tr2_like
+}
+
+
+
+
+
+
+res_tb1_34<-list() #c(1,2,4,8,11,14)
+res_tb2_34<-list() #c(1,4,5,7,10,13)
+for(ix in c(1:length(c_sel_al)) ){
+  res_tb1_34[[ix]]<-table((tr34_1_lik_lst[c_sel_al[ix]][[1]]- r_lm_lst[c_sel_al[ix]][[1]]$lik)>0)
+  res_tb2_34[[ix]]<-table((tr34_2_lik_lst[c_sel_al[ix]][[1]]- r_lm_lst[c_sel_al[ix]][[1]]$lik)>0)
+  
+}
+
+#r_theta_par_lst[c(1,2,4,8,11,14)]
+r_theta_par_lst[c(1,4,5,7,10,13)]
+
+ll<-length(t_r_lst)
+
+res_tb1_td_34<-list() #c(1,2,4,8,11,14)
+res_tb2_td_34<-list()
+for(ix in c(1:length(c_sel_al1)) ){
+  res_tb1_td_34[[ix]]<-table((tr34_1_lik_lst[c_sel_al1[ix]][[1]][c(2:ll)]- tr34_1_lik_lst[c_sel_al1[ix]][[1]][c(1:(ll-1))])>0)
+  res_tb2_td_34[[ix]]<-table((tr34_2_lik_lst[c_sel_al1[ix]][[1]][c(2:ll)]- tr34_2_lik_lst[c_sel_al1[ix]][[1]][c(1:(ll-1))])>0)
+  
+}
+
+
+
+
+#res_tr_34_lst<-list()
+#for(H_i in c_sel_al   ){
+#  res_tr_34_lst[[H_i]] <-tr_34(H_i)
+#}
+
+#res_tr_34_lst
+
+
+
+#tr1_like[2:(length(t_r_lst))]-tr1_like[1:(length(t_r_lst)-1)]
+#tr1_like[2:(length(t_r_lst))]-tr1_like[1:(length(t_r_lst)-1)]
+
+# (tr1_like[2:(length(t_r_lst))]-tr1_like[1:(length(t_r_lst)-1)])[(tr1_like[2:(length(t_r_lst))]-tr1_like[1:(length(t_r_lst)-1)])>0]
+
+#(tr2_like[2:(length(t_r_lst))]-tr2_like[1:(length(t_r_lst)-1)])>0
+
+
+
+#plik_1e0<-plotly::plot_ly(x =t_r_lst[1:40], y =tr1_like[1:40], name = "tr1_like",type = 'scatter'#, mode = 'lines'
+#                         )
+
+#plik_2e0<-plotly::plot_ly(x =t_r_lst[1:80], y =tr2_like[1:80], name = "tr2_like", type = 'scatter'#, mode = 'lines'
+ #                        )
+
+#plotly::subplot(plik_1e0, plik_2e0)
+
+```
+
+
+
+
+bw 2 and 3
+
+(d) Only increasing tpar or tshr
+only increasing
+
+```{r}
+
+#tree_1$tip.label
+#tree_1$edge.length
+tree_mdf_1ee<-function(tree,N,t_r){  # only increase t_par
+  tree_1<-tree
+  #tips_egde<-tree_1$edge[tree_1$edge[,2] %in% c(1:100),]
+  t_dif<-tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]*t_r
+  tips_edge_length<-tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]
+  tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]<-tips_edge_length+t_dif
+ # nontips_edge_length<-tree_1$edge.length[!tree_1$edge[,2] %in% c(1:N)]
+ # tree_1$edge.length[!tree_1$edge[,2] %in% c(1:N)]<-nontips_edge_length+sum(t_dif)/length(nontips_edge_length)
+  
+  return(tree_1)
+}
+
+tree_mdf_2ee<-function(tree,N,t_r){   #only increase t_shr
+  tree_1<-tree
+  #tips_egde<-tree_1$edge[tree_1$edge[,2] %in% c(1:100),]
+  
+  t_dif<-tree_1$edge.length[!(tree_1$edge[,2] %in% c(1:N))]*t_r
+  nontips_edge_length<-tree_1$edge.length[!(tree_1$edge[,2] %in% c(1:N))]
+  tree_1$edge.length[!(tree_1$edge[,2] %in% c(1:N))]<-nontips_edge_length+t_dif
+ 
+ # tips_edge_length<-tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]
+#  tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]<-tips_edge_length+sum(t_dif)/length(tips_edge_length)
+  
+   return(tree_1)
+}
+
+```
+
+
+```{r}
+#t_r_lst<-seq(0,0.97,by=0.005)
+tr_56<-function(H_i){
+print(paste(":",H_i))
+t_r_lst_ex<-c(seq(0,1,by=0.005),seq(1.05,3,by=0.05),seq(4,100,by=1))
+tr1_like<-lapply(t_r_lst_ex,function(t_r)cmp_lf_mou(tree_mdf_1ee(tree,N,t_r),k,model_MOU_lst[[H_i]],traits_lst[[H_i]])$lik)%>%unlist()
+tr2_like<-lapply(t_r_lst_ex,function(t_r)cmp_lf_mou(tree_mdf_2ee(tree,N,t_r),k,model_MOU_lst[[H_i]],traits_lst[[H_i]])$lik)%>%unlist()
+
+plik_1e1<-plot_ly(x =t_r_lst_ex, y =tr1_like, name = "tr1_like",type = 'scatter',mode = 'markers')%>%
+   add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0"))
+
+plik_2e1<-plot_ly(x =t_r_lst_ex, y =tr2_like, name = "tr2_like", type = 'scatter',mode = 'markers')%>%
+   add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0"))
+
+p<-subplot(plik_1e1, plik_2e1)
+
+return(list(p=p,tr1_like1=tr1_like,tr2_like2=tr2_like))
+
+}
+
+
+
+
+
+
+res_tr_56_lst<-list()
+tr56_1_lik_lst<-list()
+tr56_2_lik_lst<-list()
+for(H_i in c(1:cnt_H)   ){
+  res<-tr_56(H_i)
+  res_tr_56_lst[[H_i]] <-res$p
+  tr56_1_lik_lst[[H_i]] <-res$tr1_like1
+  tr56_2_lik_lst[[H_i]] <-res$tr2_like2
+}
+
+
+
+
+
+res_tb1_56<-list() #c(5,7,10,13)
+res_tb2_56<-list() #c(2,8,11,14)
+for(ix in c(1:length(c_sel_al)) ){
+  res_tb1_56[[ix]]<-table((tr56_1_lik_lst[c_sel_al[ix]][[1]]- r_lm_lst[c_sel_al[ix]][[1]]$lik)>0)
+  res_tb2_56[[ix]]<-table((tr56_2_lik_lst[c_sel_al[ix]][[1]]- r_lm_lst[c_sel_al[ix]][[1]]$lik)>0)
+  
+}
+
+r_theta_par_lst[c(2,8,11,14)]
+
+#res_tr_56_lst<-list()
+#for(H_i in c_sel_al   ){
+#  res_tr_56_lst[[H_i]] <-tr_56(H_i)
+#}
+
+#res_tr_56_lst
+
+#tr1_like[2:(length(t_r_lst))]-tr1_like[1:(length(t_r_lst)-1)]
+#tr1_like[2:(length(t_r_lst))]-tr1_like[1:(length(t_r_lst)-1)]
+
+# (tr1_like[2:(length(t_r_lst))]-tr1_like[1:(length(t_r_lst)-1)])[(tr1_like[2:(length(t_r_lst))]-tr1_like[1:(length(t_r_lst)-1)])>0]
+
+#(tr2_like[2:(length(t_r_lst))]-tr2_like[1:(length(t_r_lst)-1)])>0
+
+
+
+#plik_1e0<-plotly::plot_ly(x =t_r_lst[1:40], y =tr1_like[1:40], name = "tr1_like",type = 'scatter'#, mode = 'lines'
+#                         )
+
+#plik_2e0<-plotly::plot_ly(x =t_r_lst[1:80], y =tr2_like[1:80], name = "tr2_like", type = 'scatter'#, mode = 'lines'
+ #                        )
+
+#plotly::subplot(plik_1e0, plik_2e0)
+
+```
+
+
+
+```{r}
+#t_r_lst<-seq(0,0.97,by=0.005)
+tr_56<-function(H_i){
+print(paste(":",H_i))
+t_r_lst_ex<-c(seq(0,1,by=0.005),seq(1.05,3,by=0.05),seq(4,100,by=1))
+tr1_like<-lapply(t_r_lst_ex,function(t_r)cmp_lf_mou(tree_mdf_1ee(tree,N,t_r),k,model_MOU_lst[[H_i]],traits_lst[[H_i]])$lik)%>%unlist()
+tr2_like<-lapply(t_r_lst_ex,function(t_r)cmp_lf_mou(tree_mdf_2ee(tree,N,t_r),k,model_MOU_lst[[H_i]],traits_lst[[H_i]])$lik)%>%unlist()
+
+plik_1e1<-plot_ly(x =t_r_lst_ex, y =tr1_like, name = "tr1_like",type = 'scatter',mode = 'markers')%>%
+   add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0"))
+
+plik_2e1<-plot_ly(x =t_r_lst_ex, y =tr2_like, name = "tr2_like", type = 'scatter',mode = 'markers')%>%
+   add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0"))
+
+p=list()    #<-subplot(plik_1e1, plik_2e1)
+
+p[[1]]<-plik_1e1
+p[[2]]<-plik_2e1
+return(list(p=p,tr1_like1=tr1_like,tr2_like2=tr2_like))
+
+}
+
+
+
+
+
+
+res_tr_56_lst1<-list()
+#tr56_1_lik_lst<-list()
+#tr56_2_lik_lst<-list()
+for(H_i in c(1:cnt_H)   ){
+  res<-tr_56(H_i)
+  res_tr_56_lst1[[H_i]] <-res$p
+ # tr56_1_lik_lst[[H_i]] <-res$tr1_like1
+ # tr56_2_lik_lst[[H_i]] <-res$tr2_like2
+}
+
+
+
+
+res_tr_56_lst1[[3]][[1]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Increasing Rate of }\\mathbf{t_{par}}") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+
+
+res_tr_56_lst1[[4]][[2]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Increasing Rate of } \\mathbf{t_{shr}}") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+
+
+
+res_tr_56_lst1[[8]][[1]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Increasing Rate of }\\mathbf{t_{par}}") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+
+
+res_tr_56_lst1[[14]][[2]] %>% layout(#title =  TeX("\\textbf{Likelihood vs Experiment Eigenvalues in the First Dimension of } \\mathbf H"),
+         xaxis = list(title = TeX("\\textbf{Increasing Rate of } \\mathbf{t_{shr}}") ),
+         yaxis = list(title = TeX("\\textbf{Likelihood}")
+                     )) %>% config(mathjax = 'cdn')
+
+```
+
+
+
+
+### 3)
+
+
+```{r}
+
+
+tree_mdf_e<-function(tree,N,t_r){  # reduce tip2parent, increase shared length, keep the sum of edge-length unchanged
+  tree_1<-tree
+  #tips_egde<-tree_1$edge[tree_1$edge[,2] %in% c(1:100),]
+ # t_dif1<-tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]*t_r
+  tips_edge_length<-tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]
+  tree_1$edge.length[tree_1$edge[,2] %in% c(1:N)]<-tips_edge_length*t_r
+  #---------------------------------------------------------------------------
+ # t_dif2<-tree_1$edge.length[!(tree_1$edge[,2] %in% c(1:N))]*t_r
+  nontips_edge_length<-tree_1$edge.length[!(tree_1$edge[,2] %in% c(1:N))]
+  tree_1$edge.length[!(tree_1$edge[,2] %in% c(1:N))]<-nontips_edge_length*t_r
+  
+  return(tree_1)
+}
+
+t_r_lst1<-seq(0.1,100,by=0.1)
+#cmp_lf_mou(tree,k,model_MOU,traits)$lik
+#cmp_lf_mou(tree_mdf_e(tree,N,t_r=0.1),k,model_MOU,traits)$lik
+
+
+tr_7<-function(H_i){
+  print(paste(":",H_i))
+tr_like<-lapply(t_r_lst1,function(t_r)cmp_lf_mou(tree_mdf_e(tree,N,t_r),k,model_MOU_lst[[H_i]],traits_lst[[H_i]])$lik)%>%unlist()
+plik_1e<-plot_ly(x =t_r_lst1, y =tr_like, name = "tr1_like",type = 'scatter', mode = 'markers'
+                         )%>%
+   add_lines(y=r_lm_lst[[H_i]]$lik,name=paste0("lik0"))
+#plik_1e
+
+return(list(p=plik_1e,tr_like7=tr_like))
+}
+
+
+
+
+
+res_tr_7_lst<-list()
+tr7_lik_lst<-list()
+#tr56_2_lik_lst<-list()
+for(H_i in c(1:cnt_H)   ){
+  res<-tr_7(H_i)
+  res_tr_7_lst[[H_i]] <-res$p
+  tr7_lik_lst[[H_i]] <-res$tr_like7
+#  tr56_2_lik_lst[[H_i]] <-res$tr2_like2
+}
+
+
+
+
+res_tb1_7<-list()
+#res_tb2_56<-list()
+for(ix in c(1:length(c_sel_al)) ){
+  res_tb1_7[[ix]]<-table((tr7_lik_lst[c_sel_al[ix]][[1]]- r_lm_lst[c_sel_al[ix]][[1]]$lik)>0)
+  #res_tb2_56[[ix]]<-table((tr56_2_lik_lst[c_sel_al[ix]][[1]]- r_lm_lst[c_sel_al[ix]][[1]]$lik)>0)
+  
+}
+
+
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
